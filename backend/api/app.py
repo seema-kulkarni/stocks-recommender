@@ -1,116 +1,116 @@
-"""
-FastAPI application for the Stock Analyst Agent.
-
-Endpoints:
-  POST /api/analyze          — main chat + analysis endpoint
-  GET  /api/session/{id}     — fetch session memory
-  DELETE /api/session/{id}   — clear session
-  GET  /api/health           — liveness probe
-"""
-from __future__ import annotations
-
-import logging
-import uuid
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import logging
+import os
 
+from models.schemas import AnalysisRequest, AgentResponse
 from agents.orchestrator import Orchestrator
-from config import get_settings
 from memory.manager import MemoryManager
-from models.schemas import (
-    AgentResponse,
-    AnalysisRequest,
-    SessionMemory,
-)
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-# ── App setup ─────────────────────────────────────────────────────────────────
-settings = get_settings()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Stock Analyst API starting up...")
+    yield
+    logger.info("Stock Analyst API shutting down...")
+
 
 app = FastAPI(
-    title="Stock Analyst Agent API",
-    description="Multi-agent AI system for stock market analysis and recommendations.",
+    title="Stock Analyst Agent",
+    description="Multi-agent AI stock analysis powered by Claude",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # tighten in production
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Singletons (created once at startup) ─────────────────────────────────────
-memory_manager = MemoryManager(
-    redis_url=settings.redis_url,
-    ttl_seconds=3600,
-)
-orchestrator = Orchestrator(memory=memory_manager)
+memory_manager = MemoryManager()
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+def _validate_api_key(x_api_key: str | None) -> str:
+    """
+    Validate the Anthropic API key passed from the frontend.
+    Falls back to the environment variable if no header is provided
+    (useful for local dev / Docker where the key is in .env).
+    """
+    if x_api_key and x_api_key.startswith("sk-ant-"):
+        return x_api_key
 
-@app.get("/api/health")
-async def health() -> dict:
-    return {"status": "ok", "model": settings.agent_model}
+    env_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if env_key.startswith("sk-ant-"):
+        return env_key
+
+    raise HTTPException(
+        status_code=401,
+        detail="Valid Anthropic API key required. "
+               "Pass it as the X-API-Key header (starting with sk-ant-).",
+    )
 
 
 @app.post("/api/analyze", response_model=AgentResponse)
-async def analyze(request: AnalysisRequest) -> AgentResponse:
+async def analyze(
+    request: AnalysisRequest,
+    x_api_key: str | None = Header(default=None),
+):
     """
-    Main endpoint. Accepts a user message + session context, runs the
-    orchestrator pipeline, and returns a structured recommendation response.
+    Main analysis endpoint.
+    Accepts an optional X-API-Key header containing the user's Anthropic key.
+    Falls back to the ANTHROPIC_API_KEY environment variable if not provided.
     """
-    if not settings.anthropic_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="ANTHROPIC_API_KEY is not configured on the server.",
-        )
-
-    log.info(
-        "analyze | session=%s mode=%s msg=%r",
-        request.session_id,
-        request.mode,
-        request.message[:80],
-    )
+    api_key = _validate_api_key(x_api_key)
 
     try:
-        response = await orchestrator.handle(request)
-        log.info(
-            "analyze | session=%s iterations=%d tools=%d recs=%d",
-            request.session_id,
-            response.iterations,
-            response.tool_calls_made,
-            len(response.recommendations),
+        orchestrator = Orchestrator(
+            memory_manager=memory_manager,
+            api_key=api_key,
         )
+        response = await orchestrator.handle(request)
         return response
-    except Exception as exc:
-        log.exception("analyze | unhandled error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as e:
+        logger.exception("Error during analysis")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/session/{session_id}", response_model=SessionMemory)
-async def get_session(session_id: str) -> SessionMemory:
-    """Return the current session memory (holdings, history, cached tickers)."""
-    return memory_manager.load(session_id)
+@app.get("/api/session/{session_id}")
+async def get_session(
+    session_id: str,
+    x_api_key: str | None = Header(default=None),
+):
+    _validate_api_key(x_api_key)
+    session = await memory_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
 
 
 @app.delete("/api/session/{session_id}")
-async def delete_session(session_id: str) -> dict:
-    """Clear all session data."""
-    memory_manager.delete(session_id)
-    return {"deleted": session_id}
+async def delete_session(
+    session_id: str,
+    x_api_key: str | None = Header(default=None),
+):
+    _validate_api_key(x_api_key)
+    await memory_manager.delete_session(session_id)
+    return {"status": "deleted", "session_id": session_id}
 
 
 @app.post("/api/session/new")
-async def new_session() -> dict:
-    """Generate a fresh session ID."""
-    return {"session_id": str(uuid.uuid4())}
+async def new_session(x_api_key: str | None = Header(default=None)):
+    _validate_api_key(x_api_key)
+    import uuid
+    session_id = str(uuid.uuid4())
+    await memory_manager.init_session(session_id)
+    return {"session_id": session_id}
+
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "service": "stock-analyst-agent"}
