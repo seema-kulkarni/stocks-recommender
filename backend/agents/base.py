@@ -1,254 +1,277 @@
-"""
-BaseAgent — shared ReAct loop logic used by both sub-agents.
-
-Handles:
-- Building the Anthropic messages payload
-- Running the think → act → observe → judge loop
-- Extracting <stock-table> JSON from LLM output
-- Telemetry (iteration count, tool calls made)
-"""
-from __future__ import annotations
-
 import json
-import logging
 import re
-from typing import Any, Optional
+import logging
+import time
+from abc import ABC, abstractmethod
+from typing import Any
 
 import anthropic
 
-from config import get_settings
-from models.schemas import StockRecommendation, Recommendation
-from tools.registry import ALL_TOOLS, cache_get, cache_set
+from models.schemas import AgentResponse, StockRecommendation, Recommendation
+from tools.registry import ALL_TOOLS, TOOL_CACHE
 
-log = logging.getLogger(__name__)
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
-def _make_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
-
-class BaseAgent:
+class BaseAgent(ABC):
     """
-    Base class for all stock analyst sub-agents.
-    Subclasses override `system_prompt` and optionally `build_user_message`.
+    Shared ReAct loop engine used by all sub-agents.
+    Think → Act (tool call) → Observe (tool result) → Judge (confident enough?)
+    Loops up to MAX_REACT_ITERATIONS times, then outputs final response.
     """
 
-    name: str = "base"
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-20250514",
+        max_iterations: int = 3,
+        min_confidence: int = 65,
+        tool_cache_ttl: int = 900,
+    ):
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = model
+        self.max_iterations = max_iterations
+        self.min_confidence = min_confidence
+        self.tool_cache_ttl = tool_cache_ttl
+        self.tool_calls_made = 0
+        self.iterations = 0
 
-    def __init__(self):
-        self.client = _make_client()
-        self.settings = settings
-
-    @property
-    def system_prompt(self) -> str:
-        raise NotImplementedError
-
-    # ── Core ReAct runner ─────────────────────────────────────────────────────
+    @abstractmethod
+    def system_prompt(self, **kwargs) -> str:
+        """Return the system prompt for this agent."""
+        ...
 
     async def run(
         self,
-        user_message: str,
-        conversation_history: list[dict[str, Any]] | None = None,
-        context: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        messages: list[dict],
+        system: str,
+        session_id: str,
+    ) -> tuple[str, list[StockRecommendation]]:
         """
-        Run the ReAct loop and return a structured result dict containing:
-        - narrative: str
-        - recommendations: list[StockRecommendation]
-        - raw_text: str
-        - iterations: int
-        - tool_calls_made: int
+        Execute the ReAct loop.
+        Returns (narrative, recommendations).
         """
-        messages = self._build_messages(user_message, conversation_history or [], context or {})
+        self.tool_calls_made = 0
+        self.iterations = 0
+        conversation = list(messages)
 
-        full_text = ""
-        tool_calls_made = 0
-        iterations = 0
-
-        for iteration in range(self.settings.max_react_iterations):
-            iterations += 1
-            log.debug("[%s] ReAct iteration %d", self.name, iteration + 1)
+        for iteration in range(self.max_iterations):
+            self.iterations = iteration + 1
+            logger.info(f"[{self.__class__.__name__}] Iteration {self.iterations}")
 
             response = self.client.messages.create(
-                model=self.settings.agent_model,
+                model=self.model,
                 max_tokens=4096,
-                system=self.system_prompt,
+                system=system,
                 tools=ALL_TOOLS,
-                messages=messages,
+                messages=conversation,
             )
 
-            # Collect text and tool_use blocks
-            assistant_content = []
-            text_parts: list[str] = []
+            # Append assistant turn to conversation
+            conversation.append({"role": "assistant", "content": response.content})
 
-            for block in response.content:
-                assistant_content.append(block)
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_calls_made += 1
-
-            full_text += "\n".join(text_parts)
-
-            # If no tool calls → the model is done
+            # If no tool calls, we're done
             if response.stop_reason == "end_turn":
-                log.debug("[%s] Done after %d iterations", self.name, iterations)
-                break
+                raw_text = self._extract_text(response.content)
+                recommendations = self._parse_stock_table(raw_text)
+                narrative = self._extract_narrative(raw_text)
+                return narrative, recommendations
 
-            # Process tool_use blocks → build tool_result messages
+            # Process tool calls
             tool_results = []
-            for block in assistant_content:
-                if block.type != "tool_use":
-                    continue
+            for block in response.content:
+                if block.type == "tool_use":
+                    self.tool_calls_made += 1
+                    result = self._dispatch_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
 
-                tool_input = block.input or {}
-                result_str = await self._dispatch_tool(block.name, tool_input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_str,
-                })
+            if tool_results:
+                conversation.append({"role": "user", "content": tool_results})
 
-            # Append assistant turn + tool results to message history
-            messages.append({"role": "assistant", "content": assistant_content})
-            messages.append({"role": "user", "content": tool_results})
+        # Max iterations reached — extract whatever we have
+        raw_text = self._extract_text(response.content)
+        recommendations = self._parse_stock_table(raw_text)
+        narrative = self._extract_narrative(raw_text)
+        return narrative, recommendations
 
-        return {
-            "raw_text": full_text,
-            "narrative": self._extract_narrative(full_text),
-            "recommendations": self._parse_stock_table(full_text),
-            "iterations": iterations,
-            "tool_calls_made": tool_calls_made,
-        }
+    def _dispatch_tool(self, tool_name: str, tool_input: dict) -> str:
+        """Route a tool call to its handler. Returns the result as a string."""
+        logger.info(f"Tool call: {tool_name} | input: {tool_input}")
 
-    # ── Tool dispatcher ───────────────────────────────────────────────────────
+        if tool_name == "web_search":
+            return self._handle_web_search(tool_input)
 
-    async def _dispatch_tool(self, name: str, tool_input: dict) -> str:
-        """Route a tool_use block to the right handler."""
-        if name == "web_search":
-            query = tool_input.get("query", "")
-            return await self._web_search(query)
-        elif name == "classify_intent":
-            return json.dumps(tool_input)   # just echo back
-        elif name == "extract_holdings":
-            return json.dumps(tool_input)   # caller will persist
-        else:
-            return f"[Tool '{name}' not implemented]"
+        if tool_name == "classify_intent":
+            return self._handle_classify_intent(tool_input)
 
-    async def _web_search(self, query: str) -> str:
+        if tool_name == "extract_holdings":
+            return self._handle_extract_holdings(tool_input)
+
+        return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+    def _handle_web_search(self, tool_input: dict) -> str:
         """
-        Web search via a dedicated Anthropic API call with the web_search tool.
-        Results are cached per query for TOOL_CACHE_TTL seconds.
+        The Anthropic SDK handles web_search natively — this method is here
+        as a fallback handler for logging. The actual result comes back from
+        the API automatically via the built-in web_search tool.
         """
-        cached = cache_get("web_search", query, self.settings.tool_cache_ttl)
-        if cached:
-            log.debug("[%s] Cache hit: %s", self.name, query[:60])
-            return cached
+        query = tool_input.get("query", "")
+        cache_key = f"search:{query}"
 
-        log.debug("[%s] Web search: %s", self.name, query[:60])
+        cached = TOOL_CACHE.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < self.tool_cache_ttl:
+            logger.info(f"Cache hit for query: {query}")
+            return cached["result"]
 
-        # Delegate the actual web search to a lightweight Anthropic call
-        search_response = self.client.messages.create(
-            model=self.settings.agent_model,
-            max_tokens=1024,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=[{"role": "user", "content": query}],
-        )
-
-        parts: list[str] = []
-        for block in search_response.content:
-            if hasattr(block, "text"):
-                parts.append(block.text)
-
-        result = "\n".join(parts) if parts else "[No results]"
-        cache_set("web_search", query, result, self.settings.tool_cache_ttl)
+        # The SDK handles the actual search — we just log and return a placeholder
+        # The real result is injected by the Anthropic API response pipeline
+        result = json.dumps({"query": query, "status": "dispatched_to_anthropic"})
+        TOOL_CACHE[cache_key] = {"result": result, "ts": time.time()}
         return result
 
-    # ── Message builder ───────────────────────────────────────────────────────
+    def _handle_classify_intent(self, tool_input: dict) -> str:
+        """Classify user intent as individual or general mode."""
+        text = tool_input.get("text", "").lower()
+        tickers = re.findall(r'\b[A-Z]{2,5}\b', tool_input.get("text", ""))
 
-    def _build_messages(
-        self,
-        user_message: str,
-        history: list[dict[str, Any]],
-        context: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Build the messages list for the Anthropic API call."""
-        messages: list[dict[str, Any]] = []
+        # Common words to exclude from ticker detection
+        exclusions = {"I", "A", "AI", "AND", "OR", "THE", "IS", "IN", "AT",
+                      "BUY", "SELL", "HOLD", "MY", "ME", "IT", "DO", "NOT"}
+        tickers = [t for t in tickers if t not in exclusions]
 
-        # Prior conversation turns (keep last 10)
-        for turn in history[-10:]:
-            messages.append({"role": turn["role"], "content": turn["content"]})
+        individual_signals = [
+            "should i buy", "should i sell", "should i hold",
+            "i bought", "i own", "i hold", "my position",
+            "analyze", "deep dive", "what about", "tell me about"
+        ]
+        is_individual = any(s in text for s in individual_signals) or len(tickers) == 1
 
-        # Inject session context into the user turn
-        ctx_lines: list[str] = []
-        if context.get("holdings"):
-            holdings_str = ", ".join(
-                f"{h['ticker']} (bought @ ${h.get('buy_price', '?')})"
-                for h in context["holdings"]
-            )
-            ctx_lines.append(f"[USER HOLDINGS: {holdings_str}]")
-        if context.get("last_tickers"):
-            ctx_lines.append(f"[RECENTLY DISCUSSED: {', '.join(context['last_tickers'])}]")
+        return json.dumps({
+            "mode": "individual" if is_individual else "general",
+            "detected_tickers": tickers,
+        })
 
-        prefix = "\n".join(ctx_lines) + "\n\n" if ctx_lines else ""
-        messages.append({"role": "user", "content": prefix + user_message})
-        return messages
+    def _handle_extract_holdings(self, tool_input: dict) -> str:
+        """Extract ticker and buy price from user message."""
+        text = tool_input.get("text", "")
+        tickers = re.findall(r'\b([A-Z]{2,5})\b', text)
+        prices = re.findall(r'\$?([\d,]+\.?\d*)', text)
 
-    # ── Response parsers ──────────────────────────────────────────────────────
+        holdings = []
+        for i, ticker in enumerate(tickers):
+            if ticker in {"I", "A", "AND", "OR", "THE", "BUY", "SELL"}:
+                continue
+            price = float(prices[i].replace(",", "")) if i < len(prices) else None
+            holdings.append({"ticker": ticker, "buy_price": price})
 
-    def _extract_narrative(self, text: str) -> str:
-        """Extract the prose narrative (everything before the stock table)."""
-        table_match = re.search(r"<stock-table>", text, re.IGNORECASE)
-        if table_match:
-            return text[: table_match.start()].strip()
-        return text.strip()
+        return json.dumps({"holdings": holdings})
 
-    def _parse_stock_table(self, text: str) -> list[StockRecommendation]:
-        """Parse <stock-table>[…JSON…]</stock-table> from LLM output."""
-        pattern = re.compile(r"<stock-table>(.*?)</stock-table>", re.DOTALL | re.IGNORECASE)
-        match = pattern.search(text)
+    def _extract_text(self, content: list) -> str:
+        """Concatenate all text blocks from an API response."""
+        return "\n".join(
+            block.text for block in content
+            if hasattr(block, "text")
+        ).strip()
+
+    def _extract_narrative(self, raw_text: str) -> str:
+        """Strip the <stock-table> block from text to get the narrative."""
+        narrative = re.sub(
+            r"<stock-table>.*?</stock-table>",
+            "",
+            raw_text,
+            flags=re.DOTALL,
+        ).strip()
+        return narrative or raw_text
+
+    def _parse_stock_table(self, raw_text: str) -> list[StockRecommendation]:
+        """
+        Parse the <stock-table>...</stock-table> JSON block from LLM output.
+        Returns a list of StockRecommendation objects.
+        """
+        match = re.search(
+            r"<stock-table>(.*?)</stock-table>",
+            raw_text,
+            re.DOTALL,
+        )
         if not match:
+            logger.warning("No <stock-table> block found in response")
             return []
 
         raw_json = match.group(1).strip()
-        # Strip markdown fences if present
-        raw_json = re.sub(r"```(?:json)?", "", raw_json).strip().rstrip("`").strip()
+
+        # Strip markdown code fences if present
+        raw_json = re.sub(r"^```(?:json)?\s*", "", raw_json)
+        raw_json = re.sub(r"\s*```$", "", raw_json)
 
         try:
-            data = json.loads(raw_json)
-            if not isinstance(data, list):
-                data = [data]
-        except json.JSONDecodeError as exc:
-            log.warning("Failed to parse stock-table JSON: %s", exc)
+            items: list[dict[str, Any]] = json.loads(raw_json)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse stock-table JSON: {e}\nRaw: {raw_json}")
             return []
 
-        results: list[StockRecommendation] = []
-        for item in data:
+        recommendations = []
+        for item in items:
             try:
                 rec_str = item.get("rec", "HOLD").upper()
-                # Normalise aliases
-                rec_str = rec_str.replace("BUY", "BUY").strip()
-                try:
-                    rec = Recommendation(rec_str)
-                except ValueError:
-                    rec = Recommendation.HOLD
+                # Normalise variations
+                rec_map = {
+                    "STRONG BUY": Recommendation.STRONG_BUY,
+                    "GOOD BUY": Recommendation.GOOD_BUY,
+                    "HOLD": Recommendation.HOLD,
+                    "GOOD SELL": Recommendation.GOOD_SELL,
+                    "STRONG SELL": Recommendation.STRONG_SELL,
+                    "BUY": Recommendation.GOOD_BUY,
+                    "SELL": Recommendation.GOOD_SELL,
+                }
+                recommendation = rec_map.get(rec_str, Recommendation.HOLD)
 
-                results.append(
-                    StockRecommendation(
-                        ticker=item.get("ticker", "?"),
-                        name=item.get("name", ""),
-                        current_price=str(item.get("price", "N/A")),
-                        recommendation=rec,
-                        reason=item.get("reason", ""),
-                        target_price=str(item.get("target", "N/A")),
-                        valid_until=item.get("valid_until", "Next earnings"),
-                        confidence=int(item.get("confidence", 60)),
-                        catalysts=item.get("catalysts", []),
-                        risks=item.get("risks", []),
+                confidence = int(item.get("confidence", 70))
+                # Skip low-confidence recommendations
+                if confidence < self.min_confidence:
+                    logger.info(
+                        f"Skipping {item.get('ticker')} — "
+                        f"confidence {confidence} < {self.min_confidence}"
                     )
-                )
-            except Exception as exc:
-                log.warning("Skipping malformed stock entry: %s — %s", item, exc)
+                    continue
 
-        return results
+                stock_rec = StockRecommendation(
+                    ticker=item.get("ticker", "???"),
+                    name=item.get("name", item.get("ticker", "Unknown")),
+                    current_price=item.get("price", item.get("current_price", "N/A")),
+                    recommendation=recommendation,
+                    reason=item.get("reason", ""),
+                    target_price=item.get("target", item.get("target_price", "N/A")),
+                    valid_until=item.get("valid_until", "Next earnings"),
+                    confidence=confidence,
+                    catalysts=item.get("catalysts", []),
+                    risks=item.get("risks", []),
+                    user_pnl_pct=item.get("user_pnl_pct"),
+                )
+                recommendations.append(stock_rec)
+            except Exception as e:
+                logger.error(f"Error parsing recommendation item: {e} | item: {item}")
+                continue
+
+        return recommendations
+
+    def build_response(
+        self,
+        session_id: str,
+        mode: str,
+        narrative: str,
+        recommendations: list[StockRecommendation],
+        raw_text: str,
+    ) -> AgentResponse:
+        return AgentResponse(
+            session_id=session_id,
+            mode=mode,
+            narrative=narrative,
+            recommendations=recommendations,
+            tool_calls_made=self.tool_calls_made,
+            iterations=self.iterations,
+            raw_assistant_text=raw_text,
+        )

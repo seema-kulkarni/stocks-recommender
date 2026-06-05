@@ -1,177 +1,155 @@
-"""
-Orchestrator Agent — the top-level coordinator.
-
-Responsibilities:
-1. Parse user intent (individual vs general) using the LLM + classify_intent tool.
-2. Extract any stock holdings the user mentions via extract_holdings tool.
-3. Persist holdings and conversation turns to the MemoryManager.
-4. Invoke the appropriate sub-agent with enriched context.
-5. Return a fully-assembled AgentResponse.
-"""
-from __future__ import annotations
-
-import json
 import logging
 import re
-from typing import Any, Optional
 
 import anthropic
 
-from agents.base import _make_client
+from models.schemas import (
+    AgentResponse,
+    AgentMode,
+    AnalysisRequest,
+    HoldingContext,
+)
 from agents.individual import IndividualStockAgent
 from agents.general import GeneralMarketAgent
-from agents.prompts import ORCHESTRATOR_SYSTEM
-from config import get_settings
+from agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 from memory.manager import MemoryManager
-from models.schemas import (
-    AgentMode, AgentResponse, AnalysisRequest,
-    HoldingContext, ChatMessage,
-)
 from tools.registry import ALL_TOOLS
 
-log = logging.getLogger(__name__)
-settings = get_settings()
+logger = logging.getLogger(__name__)
+
+# Common words to exclude when scanning for ticker symbols
+TICKER_EXCLUSIONS = {
+    "I", "A", "AI", "AND", "OR", "THE", "IS", "IN", "AT", "BUY",
+    "SELL", "HOLD", "MY", "ME", "IT", "DO", "NOT", "SO", "BE",
+    "TO", "OF", "ON", "AN", "AS", "BY", "US", "AM", "PM",
+}
 
 
 class Orchestrator:
     """
-    Entry point for every user message.
-    Instantiated once at app startup and reused across requests.
+    Top-level router.
+    1. Parses intent from the user message (individual vs general mode)
+    2. Merges known holdings from request into session memory
+    3. Delegates to IndividualStockAgent or GeneralMarketAgent
+    4. Returns a structured AgentResponse
     """
 
-    def __init__(self, memory: MemoryManager):
-        self.memory = memory
-        self.client = _make_client()
-        self._individual = IndividualStockAgent()
-        self._general = GeneralMarketAgent()
-
-    # ── Public API ────────────────────────────────────────────────────────────
+    def __init__(self, memory_manager: MemoryManager, api_key: str):
+        self.memory = memory_manager
+        self.api_key = api_key
 
     async def handle(self, request: AnalysisRequest) -> AgentResponse:
         session_id = request.session_id
-        mem = self.memory.load(session_id)
 
-        # 1. Persist incoming known holdings (sent by frontend)
-        for h in request.known_holdings:
-            self.memory.upsert_holding(session_id, h)
+        # ── 1. Restore / initialise session ──────────────────────────────────
+        session = await self.memory.get_or_create_session(session_id)
 
-        # 2. Parse intent + extract any new holdings from the message
-        intent_result = await self._parse_intent(request.message, mem)
-        mode: AgentMode = intent_result["mode"]
-        tickers: list[str] = intent_result.get("tickers", [])
-        new_holdings: list[HoldingContext] = intent_result.get("holdings", [])
+        # ── 2. Merge holdings from request into session memory ────────────────
+        if request.known_holdings:
+            await self.memory.upsert_holdings(session_id, request.known_holdings)
+            session = await self.memory.get_or_create_session(session_id)
 
-        # Persist new holdings extracted from this message
-        for h in new_holdings:
-            self.memory.upsert_holding(session_id, h)
+        all_holdings: list[HoldingContext] = session.get("holdings", [])
 
-        # Update last-mentioned tickers
-        if tickers:
-            self.memory.set_tickers(session_id, tickers)
+        # ── 3. Determine mode ─────────────────────────────────────────────────
+        mode, detected_tickers = self._classify(request)
+        effective_mode = request.mode if request.mode else mode
 
-        # Reload memory (with updates)
-        mem = self.memory.load(session_id)
+        logger.info(
+            f"[Orchestrator] session={session_id} "
+            f"mode={effective_mode} tickers={detected_tickers}"
+        )
 
-        # 3. Build context dict for the sub-agent
-        context = self._build_context(mem, mode, tickers)
+        # ── 4. Build conversation history for the sub-agent ───────────────────
+        history = request.conversation_history or []
+        messages = [{"role": m.role, "content": m.content} for m in history]
+        messages.append({"role": "user", "content": request.message})
 
-        # 4. Build conversation history for the sub-agent
-        history = [{"role": t.role, "content": t.content} for t in mem.conversation[-8:]]
+        # ── 5. Route to sub-agent ─────────────────────────────────────────────
+        if effective_mode == AgentMode.individual:
+            ticker = detected_tickers[0] if detected_tickers else None
+            holding = self._find_holding(ticker, all_holdings) if ticker else None
 
-        # 5. Invoke the right sub-agent
-        if mode == AgentMode.INDIVIDUAL and tickers:
-            ticker = tickers[0].upper()
-            context["ticker"] = ticker
-            # Attach holding context if user holds this stock
-            holding = next((h for h in mem.holdings if h.ticker == ticker), None)
-            if holding:
-                context["holding"] = holding.model_dump()
-            result = await self._individual.run(request.message, history, context)
+            agent = IndividualStockAgent(
+                api_key=self.api_key,
+                ticker=ticker,
+                holding=holding,
+            )
+            system = agent.system_prompt(
+                ticker=ticker,
+                holding=holding,
+                holdings=all_holdings,
+            )
         else:
-            result = await self._general.run(request.message, history, context)
+            agent = GeneralMarketAgent(api_key=self.api_key)
+            system = agent.system_prompt(holdings=all_holdings)
 
-        # 6. Persist conversation turns
-        self.memory.append_turn(session_id, "user", request.message)
-        self.memory.append_turn(session_id, "assistant", result["raw_text"][:2000])
-
-        return AgentResponse(
+        narrative, recommendations = await agent.run(
+            messages=messages,
+            system=system,
             session_id=session_id,
-            mode=mode,
-            narrative=result["narrative"],
-            recommendations=result["recommendations"],
-            tool_calls_made=result["tool_calls_made"],
-            iterations=result["iterations"],
-            raw_assistant_text=result["raw_text"],
         )
 
-    # ── Intent parsing ────────────────────────────────────────────────────────
+        # ── 6. Persist conversation turn ──────────────────────────────────────
+        await self.memory.append_conversation(
+            session_id,
+            role="user",
+            content=request.message,
+        )
+        await self.memory.append_conversation(
+            session_id,
+            role="assistant",
+            content=narrative,
+        )
 
-    async def _parse_intent(
+        # ── 7. Build and return response ──────────────────────────────────────
+        return agent.build_response(
+            session_id=session_id,
+            mode=effective_mode,
+            narrative=narrative,
+            recommendations=recommendations,
+            raw_text=narrative,
+        )
+
+    def _classify(self, request: AnalysisRequest) -> tuple[AgentMode, list[str]]:
+        """
+        Determine agent mode and extract ticker symbols from the user message.
+        Uses a lightweight heuristic — no extra API call needed.
+        """
+        text = request.message
+        upper_text = text.upper()
+
+        # Extract candidate tickers (2-5 uppercase letters)
+        raw_tickers = re.findall(r'\b([A-Z]{2,5})\b', upper_text)
+        tickers = [t for t in raw_tickers if t not in TICKER_EXCLUSIONS]
+
+        # Individual-mode signals
+        individual_signals = [
+            "should i buy", "should i sell", "should i hold",
+            "i bought", "i own", "i hold", "i have",
+            "my position", "my stock", "my shares",
+            "analyze ", "deep dive", "what about", "tell me about",
+            "buy more", "add more", "take profit", "cut loss",
+        ]
+        text_lower = text.lower()
+        has_individual_signal = any(s in text_lower for s in individual_signals)
+
+        # If exactly one ticker detected OR individual signal present → individual mode
+        if tickers and (len(tickers) == 1 or has_individual_signal):
+            return AgentMode.individual, tickers[:1]
+
+        return AgentMode.general, tickers
+
+    def _find_holding(
         self,
-        message: str,
-        mem,
-    ) -> dict[str, Any]:
-        """
-        Use a lightweight LLM call (with classify_intent + extract_holdings tools)
-        to determine mode, tickers, and any holdings mentioned.
-        """
-        response = self.client.messages.create(
-            model=settings.agent_model,
-            max_tokens=512,
-            system=ORCHESTRATOR_SYSTEM,
-            tools=ALL_TOOLS,
-            messages=[{"role": "user", "content": message}],
-        )
-
-        result: dict[str, Any] = {"mode": AgentMode.GENERAL, "tickers": [], "holdings": []}
-
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
-            inp = block.input or {}
-
-            if block.name == "classify_intent":
-                raw_mode = inp.get("mode", "general")
-                result["mode"] = AgentMode.INDIVIDUAL if raw_mode == "individual" else AgentMode.GENERAL
-                result["tickers"] = [t.upper() for t in inp.get("tickers", [])]
-
-            elif block.name == "extract_holdings":
-                ticker = inp.get("ticker", "").upper()
-                if ticker:
-                    result["holdings"].append(
-                        HoldingContext(
-                            ticker=ticker,
-                            buy_price=inp.get("buy_price"),
-                            quantity=inp.get("quantity"),
-                            buy_date=inp.get("buy_date"),
-                        )
-                    )
-                    # If a holding is mentioned, treat it as individual mode
-                    if result["mode"] == AgentMode.GENERAL and ticker:
-                        result["mode"] = AgentMode.INDIVIDUAL
-                        if ticker not in result["tickers"]:
-                            result["tickers"].append(ticker)
-
-        # Fallback: regex scan for known tickers if LLM missed them
-        if not result["tickers"]:
-            from tools.registry import FULL_WATCHLIST
-            all_tickers = {w["ticker"] for w in FULL_WATCHLIST}
-            found = re.findall(r'\b([A-Z]{2,5})\b', message.upper())
-            matched = [t for t in found if t in all_tickers]
-            if matched:
-                result["tickers"] = matched
-                if len(matched) == 1:
-                    result["mode"] = AgentMode.INDIVIDUAL
-
-        return result
-
-    # ── Context builder ───────────────────────────────────────────────────────
-
-    def _build_context(self, mem, mode: AgentMode, tickers: list[str]) -> dict[str, Any]:
-        return {
-            "mode": mode.value,
-            "holdings": [h.model_dump() for h in mem.holdings],
-            "last_tickers": mem.last_tickers_mentioned,
-            "session_id": mem.session_id,
-        }
+        ticker: str | None,
+        holdings: list[HoldingContext],
+    ) -> HoldingContext | None:
+        """Return the holding record for a given ticker, if the user holds it."""
+        if not ticker:
+            return None
+        for h in holdings:
+            h_ticker = h.ticker if isinstance(h, HoldingContext) else h.get("ticker")
+            if h_ticker and h_ticker.upper() == ticker.upper():
+                return h
+        return None
