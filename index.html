@@ -1,811 +1,189 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Portfolio Allocator</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Monthly Portfolio Allocator — Version B (7 positions)</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  :root {
-    --bg:        #0a0e1a;
-    --surface:   #111827;
-    --surface2:  #1a2235;
-    --border:    #1e2d45;
-    --border2:   #2a3f5f;
-    --accent:    #4a9eff;
-    --accent-dim:#1a3a5c;
-    --text:      #e2e8f0;
-    --muted:     #64748b;
-    --muted2:    #94a3b8;
-    --green:     #22c55e;
-    --green-dim: #14532d;
-    --amber:     #f59e0b;
-    --amber-dim: #451a03;
-    --orange:    #f97316;
-    --orange-dim:#431407;
-    --slate:     #94a3b8;
-    --slate-dim: #1e2535;
-    --disabled:  #2a3347;
-    --disabled-t:#3d4f6b;
-    --radius:    8px;
-    --radius-lg: 12px;
+  :root{
+    --bg:#0a0e1a; --panel:#111726; --panel2:#0d1320;
+    --line:#1e2942; --text:#e8edf7; --muted:#8a98b5;
+    --blue:#4a9eff; --green:#28c840; --amber:#febc2e; --red:#ff5f57;
+    --tech:#4a9eff; --def:#28c840; --idx:#febc2e;
   }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    font-size: 14px;
-    line-height: 1.6;
-    min-height: 100vh;
-    padding: 0 16px 60px;
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    line-height:1.5; padding:32px 16px;
   }
-
-  /* ── Header ── */
-  header {
-    max-width: 860px;
-    margin: 0 auto;
-    padding: 32px 0 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .logo-group { display: flex; flex-direction: column; gap: 4px; }
-  .logo {
-    font-family: 'Courier New', monospace;
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--accent);
-    letter-spacing: -0.5px;
-  }
-  .logo span { color: var(--text); }
-  .tagline { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
-  .date-badge {
-    font-family: 'Courier New', monospace;
-    font-size: 11px;
-    color: var(--muted);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 4px 10px;
-    white-space: nowrap;
-  }
-
-  /* ── Tabs ── */
-  .tabs {
-    max-width: 860px;
-    margin: 24px auto 0;
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-  }
-  .tab {
-    padding: 10px 20px;
-    font-size: 13px;
-    font-weight: 500;
-    border: none;
-    background: none;
-    cursor: pointer;
-    color: var(--muted);
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: color 0.15s;
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border-radius: var(--radius) var(--radius) 0 0;
-  }
-  .tab:hover:not(:disabled) { color: var(--text); }
-  .tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-    background: rgba(74,158,255,0.05);
-  }
-  .tab:disabled {
-    color: var(--disabled-t);
-    cursor: not-allowed;
-  }
-  .tab-lock {
-    font-size: 10px;
-    background: var(--disabled);
-    color: var(--disabled-t);
-    padding: 2px 7px;
-    border-radius: 20px;
-    font-family: 'Courier New', monospace;
-    letter-spacing: 0.03em;
-  }
-  .tab-new {
-    font-size: 9px;
-    background: var(--green-dim);
-    color: var(--green);
-    padding: 2px 7px;
-    border-radius: 20px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  /* ── Tab panels ── */
-  .panel { display: none; max-width: 860px; margin: 0 auto; }
-  .panel.active { display: block; }
-
-  /* ── Input hero ── */
-  .input-hero {
-    margin-top: 28px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 24px 28px;
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    flex-wrap: wrap;
-  }
-  .input-hero label {
-    font-size: 12px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    white-space: nowrap;
-  }
-  .input-wrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-  .input-wrap .dollar {
-    position: absolute;
-    left: 14px;
-    font-family: 'Courier New', monospace;
-    font-size: 20px;
-    color: var(--accent);
-    pointer-events: none;
-  }
-  #monthly-input {
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: 'Courier New', monospace;
-    font-size: 28px;
-    font-weight: 700;
-    width: 200px;
-    padding: 10px 14px 10px 36px;
-    outline: none;
-    transition: border-color 0.15s;
-    -moz-appearance: textfield;
-  }
-  #monthly-input::-webkit-inner-spin-button,
-  #monthly-input::-webkit-outer-spin-button { -webkit-appearance: none; }
-  #monthly-input:focus { border-color: var(--accent); }
-  .input-hint {
-    font-size: 12px;
-    color: var(--muted);
-    flex: 1;
-    min-width: 160px;
-  }
-  .input-hint strong { color: var(--text); font-weight: 600; }
-
-  /* ── Allocation bar ── */
-  .bar-section { margin-top: 20px; }
-  .bar-label {
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    margin-bottom: 8px;
-  }
-  .alloc-bar {
-    display: flex;
-    height: 32px;
-    border-radius: var(--radius);
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-  .bar-seg {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: 'Courier New', monospace;
-    font-size: 10px;
-    font-weight: 700;
-    transition: width 0.35s cubic-bezier(0.4,0,0.2,1);
-    overflow: hidden;
-    white-space: nowrap;
-  }
-
-  /* ── Main table ── */
-  .table-section { margin-top: 28px; }
-  .section-label {
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .section-label::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-
-  .alloc-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-  }
-  .alloc-table thead th {
-    background: var(--surface2);
-    color: var(--muted);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    padding: 10px 14px;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-  }
-  .alloc-table thead th:nth-child(n+3) { text-align: right; }
-
-  .alloc-table tbody tr {
-    transition: background 0.12s;
-  }
-  .alloc-table tbody tr:hover { background: rgba(74,158,255,0.04); }
-  .alloc-table tbody td {
-    padding: 13px 14px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-  }
-  .alloc-table tbody tr:last-child td { border-bottom: none; }
-  .alloc-table tbody td:nth-child(n+3) { text-align: right; }
-
-  /* Ticker badge */
-  .ticker-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-family: 'Courier New', monospace;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 3px 9px;
-    border-radius: 5px;
-    letter-spacing: 0.04em;
-    min-width: 56px;
-    text-align: center;
-  }
-  .ticker-ai       { background: var(--accent-dim); color: var(--accent); }
-  .ticker-consumer { background: var(--green-dim); color: var(--green); }
-  .ticker-energy   { background: var(--amber-dim); color: var(--amber); }
-  .ticker-health   { background: var(--orange-dim); color: var(--orange); }
-  .ticker-index    { background: var(--slate-dim); color: var(--slate); }
-
-  .company-name { font-size: 13px; font-weight: 500; color: var(--text); }
-  .company-sub  { font-size: 11px; color: var(--muted); margin-top: 1px; }
-
-  .pct-pill {
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--muted2);
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 2px 8px;
-    display: inline-block;
-  }
-  .price-val {
-    font-family: 'Courier New', monospace;
-    font-size: 13px;
-    color: var(--muted2);
-  }
-  .monthly-val {
-    font-family: 'Courier New', monospace;
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text);
-  }
-  .shares-val {
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .target-val {
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    color: var(--green);
-  }
-
-  /* Totals row */
-  .totals-row td {
-    background: var(--surface2) !important;
-    border-top: 1px solid var(--border2) !important;
-    font-weight: 700;
-  }
-  .totals-label {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted2);
-    font-family: 'Courier New', monospace;
-  }
-  #total-display {
-    font-family: 'Courier New', monospace;
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--accent);
-  }
-  .check-badge {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-family: 'Courier New', monospace;
-    display: inline-block;
-  }
-  .check-ok  { background: var(--green-dim); color: var(--green); }
-  .check-err { background: #450a0a; color: #ef4444; }
-
-  /* ── Legend ── */
-  .legend {
-    margin-top: 20px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  .legend-title {
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    margin-right: 4px;
-  }
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--muted2);
-  }
-  .legend-dot {
-    width: 10px; height: 10px;
-    border-radius: 3px;
-    flex-shrink: 0;
-  }
-
-  /* ── AI Picks panel (disabled) ── */
-  .disabled-panel {
-    margin-top: 40px;
-    border: 1px dashed var(--border2);
-    border-radius: var(--radius-lg);
-    padding: 60px 32px;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 16px;
-  }
-  .lock-icon {
-    width: 48px; height: 48px;
-    border-radius: 50%;
-    background: var(--disabled);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px;
-  }
-  .disabled-title {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--disabled-t);
-  }
-  .disabled-body {
-    font-size: 13px;
-    color: var(--muted);
-    max-width: 420px;
-    line-height: 1.7;
-  }
-  .api-input-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-    width: 100%;
-    max-width: 440px;
-  }
-  .api-input-row input {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    color: var(--disabled-t);
-    font-family: 'Courier New', monospace;
-    font-size: 13px;
-    padding: 9px 14px;
-    outline: none;
-    cursor: not-allowed;
-  }
-  .api-input-row input::placeholder { color: var(--muted); opacity: 0.5; }
-  .unlock-btn {
-    background: var(--disabled);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    color: var(--disabled-t);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 9px 16px;
-    cursor: not-allowed;
-    white-space: nowrap;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-  .coming-features {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    margin-top: 4px;
-  }
-  .feature-chip {
-    font-size: 11px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    border-radius: 20px;
-    padding: 4px 12px;
-    letter-spacing: 0.04em;
-  }
-
-  /* ── Footer ── */
-  footer {
-    max-width: 860px;
-    margin: 40px auto 0;
-    border-top: 1px solid var(--border);
-    padding-top: 20px;
-    font-size: 11px;
-    color: var(--muted);
-    line-height: 1.7;
-  }
-  footer a { color: var(--accent); text-decoration: none; }
-  footer a:hover { text-decoration: underline; }
-
-  /* ── Responsive ── */
-  @media (max-width: 640px) {
-    .alloc-table thead th:nth-child(5),
-    .alloc-table tbody td:nth-child(5),
-    .alloc-table thead th:nth-child(6),
-    .alloc-table tbody td:nth-child(6) { display: none; }
-    #monthly-input { font-size: 22px; width: 160px; }
-    .input-hero { padding: 18px; }
-  }
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px;font-weight:700;letter-spacing:-.3px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+  .mono{font-family:'Courier New',ui-monospace,monospace}
+  .tabs{display:flex;gap:8px;margin-bottom:20px}
+  .tab{padding:8px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line);
+    font-size:13px;cursor:pointer;color:var(--text)}
+  .tab.active{border-color:var(--blue);color:var(--blue)}
+  .tab.disabled{opacity:.4;cursor:not-allowed}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+  .inputrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  label{font-size:13px;color:var(--muted)}
+  .amt{display:flex;align-items:center;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:6px 12px}
+  .amt span{color:var(--muted);font-size:18px;margin-right:4px}
+  input[type=number]{background:transparent;border:none;color:var(--text);font-size:20px;
+    width:130px;outline:none;font-family:'Courier New',monospace}
+  .presets{display:flex;gap:6px}
+  .preset{padding:6px 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);
+    font-size:12px;cursor:pointer;color:var(--muted)}
+  .preset:hover{border-color:var(--blue);color:var(--blue)}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);
+    padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600}
+  td{padding:11px 10px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  .tk{font-weight:700;font-family:'Courier New',monospace}
+  .nm{color:var(--muted);font-size:12px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .d-tech{background:var(--tech)} .d-def{background:var(--def)} .d-idx{background:var(--idx)}
+  .dollar{font-family:'Courier New',monospace;font-weight:700;font-size:15px}
+  .pct{color:var(--muted);font-size:12px}
+  .shares{font-family:'Courier New',monospace;color:var(--muted);font-size:13px}
+  .totalrow td{border-top:2px solid var(--line);font-weight:700;padding-top:14px}
+  .bar{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:18px 0 10px}
+  .bar div{height:100%}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+  .legend b{color:var(--text)}
+  .sectors{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px}
+  .sbox{flex:1;min-width:140px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .sbox .lab{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .sbox .val{font-family:'Courier New',monospace;font-size:20px;font-weight:700;margin-top:2px}
+  .note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.6}
+  .foot{font-size:11px;color:var(--muted);text-align:center;margin-top:24px;line-height:1.6}
 </style>
 </head>
 <body>
+<div class="wrap">
+  <h1>Monthly Portfolio Allocator</h1>
+  <div class="sub">Version B · 7 positions · 40 / 40 / 20 · enter any amount and it splits automatically</div>
 
-<header>
-  <div class="logo-group">
-    <div class="logo">PORTFOLIO<span>.</span>ALLOCATOR</div>
-    <div class="tagline">Monthly DCA split · 6 positions · 5 sectors</div>
+  <div class="tabs">
+    <div class="tab active">Allocation</div>
+    <div class="tab disabled" title="Add an Anthropic API key to enable">AI Picks (disabled)</div>
   </div>
-  <div class="date-badge" id="date-badge">Loading…</div>
-</header>
 
-<!-- ── Tabs ── -->
-<nav class="tabs" role="tablist">
-  <button class="tab active" role="tab" aria-selected="true"
-          aria-controls="panel-portfolio" id="tab-portfolio"
-          onclick="switchTab('portfolio')">
-    My Portfolio
-    <span class="tab-new">LIVE</span>
-  </button>
-  <button class="tab" role="tab" aria-selected="false"
-          aria-controls="panel-picks" id="tab-picks"
-          disabled
-          title="Add your Anthropic API key to unlock">
-    AI Stock Picks
-    <span class="tab-lock">NEEDS API KEY</span>
-  </button>
-</nav>
-
-<!-- ════════════════════════════════════════════════════ -->
-<!-- Tab 1 — My Portfolio                                 -->
-<!-- ════════════════════════════════════════════════════ -->
-<section class="panel active" id="panel-portfolio" role="tabpanel" aria-labelledby="tab-portfolio">
-
-  <div class="input-hero">
-    <label for="monthly-input">Monthly investment</label>
-    <div class="input-wrap">
-      <span class="dollar">$</span>
-      <input type="number" id="monthly-input" value="1000" min="50" step="50"
-             aria-label="Monthly investment amount in dollars" />
+  <div class="card">
+    <div class="inputrow">
+      <label>Monthly investment</label>
+      <div class="amt"><span>$</span><input id="amt" type="number" min="0" step="10" value="1000" /></div>
+      <div class="presets">
+        <div class="preset" data-v="500">$500</div>
+        <div class="preset" data-v="1000">$1,000</div>
+        <div class="preset" data-v="1500">$1,500</div>
+        <div class="preset" data-v="2000">$2,000</div>
+      </div>
     </div>
-    <div class="input-hint">
-      Enter any amount. Each position is rounded to the nearest
-      <strong>$50</strong> and the total always equals your input exactly.
-    </div>
-  </div>
 
-  <!-- Allocation bar -->
-  <div class="bar-section">
-    <div class="bar-label">Allocation breakdown</div>
-    <div class="alloc-bar" id="alloc-bar" role="img" aria-label="Portfolio allocation bar"></div>
-  </div>
-
-  <!-- Table -->
-  <div class="table-section">
-    <div class="section-label">Position breakdown</div>
-    <table class="alloc-table" aria-label="Portfolio allocation table">
+    <table>
       <thead>
-        <tr>
-          <th>Ticker</th>
-          <th>Company</th>
-          <th>Alloc %</th>
-          <th>Price (Jun 13)</th>
-          <th>Monthly $</th>
-          <th>≈ Shares</th>
-          <th>Analyst target</th>
-        </tr>
+        <tr><th>Holding</th><th>Sector</th><th>Target %</th><th>Amount</th><th>~Shares</th></tr>
       </thead>
-      <tbody id="table-body"></tbody>
+      <tbody id="rows"></tbody>
+      <tfoot>
+        <tr class="totalrow"><td>TOTAL</td><td></td><td id="tpct">100%</td><td id="ttot" class="dollar"></td><td></td></tr>
+      </tfoot>
     </table>
-  </div>
 
-  <!-- Legend -->
-  <div class="legend">
-    <span class="legend-title">Sectors</span>
-    <span class="legend-item"><span class="legend-dot" style="background:#1a3a5c;border:1px solid #4a9eff;"></span>AI / Tech</span>
-    <span class="legend-item"><span class="legend-dot" style="background:#14532d;border:1px solid #22c55e;"></span>Consumer</span>
-    <span class="legend-item"><span class="legend-dot" style="background:#451a03;border:1px solid #f59e0b;"></span>Energy</span>
-    <span class="legend-item"><span class="legend-dot" style="background:#431407;border:1px solid #f97316;"></span>Healthcare</span>
-    <span class="legend-item"><span class="legend-dot" style="background:#1e2535;border:1px solid #94a3b8;"></span>Index / ETF</span>
-  </div>
-
-</section>
-
-<!-- ════════════════════════════════════════════════════ -->
-<!-- Tab 2 — AI Picks (disabled)                         -->
-<!-- ════════════════════════════════════════════════════ -->
-<section class="panel" id="panel-picks" role="tabpanel" aria-labelledby="tab-picks">
-  <div class="disabled-panel">
-    <div class="lock-icon">🔒</div>
-    <div class="disabled-title">AI Stock Picks — coming soon</div>
-    <div class="disabled-body">
-      This tab will use the Anthropic Claude API to search live market data and surface
-      strong-buy recommendations across AI, healthcare, energy, and consumer sectors —
-      updated on demand. Add your API key below to unlock it.
-    </div>
-    <div class="api-input-row">
-      <input type="password" placeholder="sk-ant-api03-…" disabled aria-label="Anthropic API key (disabled)">
-      <button class="unlock-btn" disabled>Unlock</button>
-    </div>
-    <div class="coming-features">
-      <span class="feature-chip">Live web search</span>
-      <span class="feature-chip">Analyst consensus</span>
-      <span class="feature-chip">Sector rotation signals</span>
-      <span class="feature-chip">Earnings calendar</span>
-      <span class="feature-chip">ReAct agent loop</span>
-      <span class="feature-chip">Bull / bear scenarios</span>
+    <div class="bar" id="bar"></div>
+    <div class="legend">
+      <span><span class="dot d-tech"></span><b>AI / Tech 40%</b> — NVDA · MU · AVGO</span>
+      <span><span class="dot d-def"></span><b>Defensive 40%</b> — WMT · XOM · NVO</span>
+      <span><span class="dot d-idx"></span><b>Index 20%</b> — SWPPX</span>
     </div>
   </div>
-</section>
 
-<!-- ── Footer ── -->
-<footer>
-  <p>
-    Prices as of June 12–13, 2026: NVDA $205 · MU $985 · WMT $120 · XOM $148 · NVO $44 · SWPPX $19.
-    Share counts are approximate — use fractional shares on Schwab for MU and NVDA.
-    Analyst targets are 12-month consensus estimates. Recommendation weightings are fixed and
-    not dynamically adjusted. This page is for <strong>informational purposes only</strong>
-    and does not constitute financial advice. Always consult a licensed financial advisor
-    before making investment decisions.
-  </p>
-  <p style="margin-top:8px;">
-    Built with Claude · <a href="https://github.com" target="_blank" rel="noopener">Host on GitHub Pages</a>
-  </p>
-</footer>
+  <div class="card">
+    <div class="sectors" id="sectors"></div>
+    <div class="note" id="note"></div>
+  </div>
+
+  <div class="foot">
+    Prices approximate as of Jun 24, 2026 and used only to estimate share counts — Schwab fractional shares handle the remainder.<br>
+    Informational only · not financial advice · dollar-cost average the same amount each month.
+  </div>
+</div>
 
 <script>
-// ── Data ──────────────────────────────────────────────────────────────────────
-const HOLDINGS = [
-  {
-    ticker:  'NVDA',
-    name:    'Nvidia',
-    sub:     'AI chips · semiconductors',
-    pct:     22,
-    price:   205,
-    target:  '$298',
-    sector:  'ai',
-    barColor:'#185FA5',
-    barLabel:'NVDA',
-  },
-  {
-    ticker:  'MU',
-    name:    'Micron Technology',
-    sub:     'HBM memory · storage',
-    pct:     18,
-    price:   985,
-    target:  '$1,250',
-    sector:  'ai',
-    barColor:'#3b82f6',
-    barLabel:'MU',
-  },
-  {
-    ticker:  'WMT',
-    name:    'Walmart',
-    sub:     'Consumer staples · retail',
-    pct:     15,
-    price:   120,
-    target:  '$138',
-    sector:  'consumer',
-    barColor:'#16a34a',
-    barLabel:'WMT',
-  },
-  {
-    ticker:  'XOM',
-    name:    'Exxon Mobil',
-    sub:     'Energy · oil & gas',
-    pct:     12,
-    price:   148,
-    target:  '$130',
-    sector:  'energy',
-    barColor:'#d97706',
-    barLabel:'XOM',
-  },
-  {
-    ticker:  'NVO',
-    name:    'Novo Nordisk',
-    sub:     'Healthcare · GLP-1 drugs',
-    pct:     13,
-    price:   44,
-    target:  '$70',
-    sector:  'health',
-    barColor:'#ea580c',
-    barLabel:'NVO',
-  },
-  {
-    ticker:  'SWPPX',
-    name:    'Schwab S&P 500',
-    sub:     'Index fund · 500 companies',
-    pct:     20,
-    price:   19,
-    target:  'N/A',
-    sector:  'index',
-    barColor:'#475569',
-    barLabel:'SWPPX',
-  },
-];
+  // ---- Version B holdings (40 / 40 / 20) ----
+  const HOLDINGS = [
+    {ticker:'NVDA',  name:'Nvidia',                sector:'AI / Tech',  cls:'tech', pct:17, price:198.00, target:'$298'},
+    {ticker:'MU',    name:'Micron Technology',     sector:'AI / Tech',  cls:'tech', pct:12, price:1048.00, target:'$1,250'},
+    {ticker:'AVGO',  name:'Broadcom',              sector:'AI / Tech',  cls:'tech', pct:11, price:382.00, target:'$524'},
+    {ticker:'WMT',   name:'Walmart',               sector:'Defensive',  cls:'def',  pct:15, price:120.00, target:'$138'},
+    {ticker:'XOM',   name:'Exxon Mobil',           sector:'Defensive',  cls:'def',  pct:12, price:145.00, target:'$130'},
+    {ticker:'NVO',   name:'Novo Nordisk',          sector:'Defensive',  cls:'def',  pct:13, price:46.70,  target:'$70'},
+    {ticker:'SWPPX', name:'Schwab S&P 500 Index',  sector:'Index',      cls:'idx',  pct:20, price:20.00,  target:'—'},
+  ];
+  const COLORS = {tech:'#4a9eff', def:'#28c840', idx:'#febc2e'};
 
-// ── Rounding that sums exactly to total ──────────────────────────────────────
-function allocate(total) {
-  // 1. Raw amounts
-  const raw = HOLDINGS.map(h => total * h.pct / 100);
-
-  // 2. Round each to nearest 50
-  let rounded = raw.map(v => Math.round(v / 50) * 50);
-
-  // 3. Ensure no zeros
-  rounded = rounded.map(v => Math.max(v, 50));
-
-  // 4. Fix sum
-  let diff = total - rounded.reduce((a, b) => a + b, 0);
-
-  // Distribute diff in $50 steps to positions by largest raw remainder first
-  if (diff !== 0) {
-    const step = diff > 0 ? 50 : -50;
-    // Sort by raw remainder descending (or ascending if reducing)
-    const remainders = raw.map((v, i) => ({ i, rem: diff > 0 ? v % 50 : -(v % 50) }));
-    remainders.sort((a, b) => b.rem - a.rem);
-    let idx = 0;
-    while (diff !== 0) {
-      rounded[remainders[idx % remainders.length].i] += step;
-      diff -= step;
-      idx++;
-      // Safety: cap iterations
-      if (idx > 100) break;
-    }
+  // Round each position to nearest $10, then adjust the largest so the total is exact.
+  function allocate(amount){
+    const raw = HOLDINGS.map(h => amount * h.pct / 100);
+    const rounded = raw.map(r => Math.round(r/10)*10);
+    let diff = amount - rounded.reduce((a,b)=>a+b,0);
+    let idx = rounded.indexOf(Math.max(...rounded)); // dump remainder into the biggest holding (SWPPX)
+    rounded[idx] += diff;
+    return rounded;
   }
 
-  return rounded;
-}
+  function fmt(n){ return '$' + Number(n).toLocaleString('en-US'); }
 
-// ── Render ────────────────────────────────────────────────────────────────────
-function fmt(n)  { return '$' + n.toLocaleString(); }
-function fmtShare(dollars, price) {
-  const s = dollars / price;
-  return s < 1 ? '~' + s.toFixed(2) : '~' + s.toFixed(1);
-}
+  function render(){
+    const amount = Math.max(0, Number(document.getElementById('amt').value) || 0);
+    const alloc = allocate(amount);
 
-function render(total) {
-  const amounts = allocate(total);
-  const tbody   = document.getElementById('table-body');
-  const bar     = document.getElementById('alloc-bar');
+    // rows
+    const rows = HOLDINGS.map((h,i)=>{
+      const $ = alloc[i];
+      const sh = h.price ? ($/h.price).toFixed($>0 && $/h.price < 1 ? 3 : 2) : '—';
+      return `<tr>
+        <td><span class="dot d-${h.cls}"></span><span class="tk">${h.ticker}</span> <span class="nm">${h.name}</span></td>
+        <td class="nm">${h.sector}</td>
+        <td class="pct">${h.pct}%</td>
+        <td class="dollar">${fmt($)}</td>
+        <td class="shares">${sh}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('rows').innerHTML = rows;
+    document.getElementById('ttot').textContent = fmt(alloc.reduce((a,b)=>a+b,0));
 
-  // ── Bar ──
-  bar.innerHTML = HOLDINGS.map((h, i) => {
-    const realPct = (amounts[i] / total * 100).toFixed(1);
-    return `<div class="bar-seg" style="width:${realPct}%;background:${h.barColor};color:#fff;"
-              title="${h.ticker}: ${realPct}%">${realPct >= 8 ? h.barLabel : ''}</div>`;
-  }).join('');
+    // bar
+    document.getElementById('bar').innerHTML = HOLDINGS.map(h =>
+      `<div style="width:${h.pct}%;background:${COLORS[h.cls]}"></div>`).join('');
 
-  // ── Table rows ──
-  const rowsHtml = HOLDINGS.map((h, i) => {
-    const dollars = amounts[i];
-    const realPct = (dollars / total * 100).toFixed(1);
-    return `
-    <tr>
-      <td><span class="ticker-badge ticker-${h.sector}">${h.ticker}</span></td>
-      <td>
-        <div class="company-name">${h.name}</div>
-        <div class="company-sub">${h.sub}</div>
-      </td>
-      <td><span class="pct-pill">${realPct}%</span></td>
-      <td><span class="price-val">${fmt(h.price)}</span></td>
-      <td><span class="monthly-val">${fmt(dollars)}</span></td>
-      <td><span class="shares-val">${fmtShare(dollars, h.price)}</span></td>
-      <td><span class="target-val">${h.target}</span></td>
-    </tr>`;
-  }).join('');
+    // sectors
+    const sec = {'AI / Tech':0,'Defensive':0,'Index':0};
+    HOLDINGS.forEach((h,i)=> sec[h.sector]+=alloc[i]);
+    const total = alloc.reduce((a,b)=>a+b,0) || 1;
+    const sboxes = [['AI / Tech','tech'],['Defensive','def'],['Index','idx']].map(([s,c])=>`
+      <div class="sbox">
+        <div class="lab"><span class="dot d-${c}"></span>${s}</div>
+        <div class="val">${fmt(sec[s])}</div>
+        <div class="pct">${Math.round(sec[s]/total*100)}% of total</div>
+      </div>`).join('');
+    document.getElementById('sectors').innerHTML = sboxes;
 
-  // ── Totals row ──
-  const sum   = amounts.reduce((a, b) => a + b, 0);
-  const ok    = sum === total;
-  const badge = ok
-    ? `<span class="check-badge check-ok">✓ balanced</span>`
-    : `<span class="check-badge check-err">⚠ ${fmt(sum)} / ${fmt(total)}</span>`;
+    document.getElementById('note').innerHTML =
+      `<b>Version B</b> keeps your three-way defensive spread (consumer · energy · healthcare) intact while adding ` +
+      `<b>AVGO</b> to the tech sleeve. To stay at 40% AI/Tech, AVGO is funded by trimming NVDA and MU rather than ` +
+      `stacking on top. Amounts round to the nearest $10 and always sum to your exact monthly figure.`;
+  }
 
-  tbody.innerHTML = rowsHtml + `
-  <tr class="totals-row">
-    <td colspan="2"><span class="totals-label">Total</span></td>
-    <td><span class="pct-pill">100%</span></td>
-    <td></td>
-    <td><span id="total-display">${fmt(sum)}</span></td>
-    <td colspan="2" style="text-align:right">${badge}</td>
-  </tr>`;
-}
-
-// ── Input handler ─────────────────────────────────────────────────────────────
-const input = document.getElementById('monthly-input');
-input.addEventListener('input', () => {
-  let v = parseInt(input.value, 10);
-  if (isNaN(v) || v < 50) return;
-  // Snap to nearest 50 on the fly only if user typed a non-50 multiple
-  render(v);
-});
-input.addEventListener('blur', () => {
-  let v = parseInt(input.value, 10);
-  if (isNaN(v) || v < 50) { input.value = 1000; v = 1000; }
-  // Round to nearest 50 on blur
-  const snapped = Math.round(v / 50) * 50 || 50;
-  input.value = snapped;
-  render(snapped);
-});
-
-// ── Tab switch ────────────────────────────────────────────────────────────────
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => {
-    t.classList.toggle('active', t.id === 'tab-' + name);
-    t.setAttribute('aria-selected', t.id === 'tab-' + name ? 'true' : 'false');
-  });
-  document.querySelectorAll('.panel').forEach(p => {
-    p.classList.toggle('active', p.id === 'panel-' + name);
-  });
-}
-
-// ── Date badge ────────────────────────────────────────────────────────────────
-document.getElementById('date-badge').textContent =
-  new Date().toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' });
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-render(1000);
+  document.getElementById('amt').addEventListener('input', render);
+  document.querySelectorAll('.preset').forEach(p =>
+    p.addEventListener('click', ()=>{ document.getElementById('amt').value = p.dataset.v; render(); }));
+  render();
 </script>
 </body>
 </html>
