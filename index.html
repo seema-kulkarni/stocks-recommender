@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Monthly Portfolio Allocator — Version B (7 positions)</title>
+<title>Monthly Portfolio Allocator — Version C (recommended list)</title>
 <style>
   :root{
     --bg:#0a0e1a; --panel:#111726; --panel2:#0d1320;
@@ -44,6 +44,8 @@
   td{padding:11px 10px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
   tr:last-child td{border-bottom:none}
   .tk{font-weight:700;font-family:'Courier New',monospace}
+  .rank{display:inline-block;width:18px;height:18px;line-height:18px;text-align:center;border-radius:50%;
+    background:var(--panel2);border:1px solid var(--line);font-size:10px;color:var(--muted);margin-right:6px}
   .nm{color:var(--muted);font-size:12px}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
   .d-tech{background:var(--tech)} .d-def{background:var(--def)} .d-idx{background:var(--idx)}
@@ -66,7 +68,7 @@
 <body>
 <div class="wrap">
   <h1>Monthly Portfolio Allocator</h1>
-  <div class="sub">Version B · 7 positions · 40 / 40 / 20 · enter any amount and it splits automatically</div>
+  <div class="sub">Version C · recommended list · 6 positions · 40 / 40 / 20 · ranked by conviction</div>
 
   <div class="tabs">
     <div class="tab active">Allocation</div>
@@ -87,7 +89,7 @@
 
     <table>
       <thead>
-        <tr><th>Holding</th><th>Sector</th><th>Target %</th><th>Amount</th><th>~Shares</th></tr>
+        <tr><th>#  Holding</th><th>Sector</th><th>Target %</th><th>Amount</th><th>~Shares</th></tr>
       </thead>
       <tbody id="rows"></tbody>
       <tfoot>
@@ -97,8 +99,8 @@
 
     <div class="bar" id="bar"></div>
     <div class="legend">
-      <span><span class="dot d-tech"></span><b>AI / Tech 40%</b> — NVDA · MU · AVGO</span>
-      <span><span class="dot d-def"></span><b>Defensive 40%</b> — WMT · XOM · NVO</span>
+      <span><span class="dot d-tech"></span><b>AI / Tech 40%</b> — NVDA · AVGO · MU</span>
+      <span><span class="dot d-def"></span><b>Defensive 40%</b> — WMT · LLY</span>
       <span><span class="dot d-idx"></span><b>Index 20%</b> — SWPPX</span>
     </div>
   </div>
@@ -115,15 +117,14 @@
 </div>
 
 <script>
-  // ---- Version B holdings (40 / 40 / 20) ----
+  // ---- Version C: recommended list, ranked by conviction (40 / 40 / 20) ----
   const HOLDINGS = [
-    {ticker:'NVDA',  name:'Nvidia',                sector:'AI / Tech',  cls:'tech', pct:17, price:198.00, target:'$298'},
-    {ticker:'MU',    name:'Micron Technology',     sector:'AI / Tech',  cls:'tech', pct:12, price:1048.00, target:'$1,250'},
-    {ticker:'AVGO',  name:'Broadcom',              sector:'AI / Tech',  cls:'tech', pct:11, price:382.00, target:'$524'},
-    {ticker:'WMT',   name:'Walmart',               sector:'Defensive',  cls:'def',  pct:15, price:120.00, target:'$138'},
-    {ticker:'XOM',   name:'Exxon Mobil',           sector:'Defensive',  cls:'def',  pct:12, price:145.00, target:'$130'},
-    {ticker:'NVO',   name:'Novo Nordisk',          sector:'Defensive',  cls:'def',  pct:13, price:46.70,  target:'$70'},
-    {ticker:'SWPPX', name:'Schwab S&P 500 Index',  sector:'Index',      cls:'idx',  pct:20, price:20.00,  target:'—'},
+    {rank:1, ticker:'NVDA',  name:'Nvidia',               sector:'AI / Tech', cls:'tech', pct:17, price:198.00,  target:'$298'},
+    {rank:2, ticker:'AVGO',  name:'Broadcom',             sector:'AI / Tech', cls:'tech', pct:12, price:382.00,  target:'$524'},
+    {rank:3, ticker:'SWPPX', name:'Schwab S&P 500 Index', sector:'Index',     cls:'idx',  pct:20, price:20.00,   target:'—'},
+    {rank:4, ticker:'WMT',   name:'Walmart',              sector:'Defensive', cls:'def',  pct:22, price:120.00,  target:'$138'},
+    {rank:5, ticker:'MU',    name:'Micron Technology',    sector:'AI / Tech', cls:'tech', pct:11, price:1048.00, target:'$1,250'},
+    {rank:6, ticker:'LLY',   name:'Eli Lilly',            sector:'Defensive', cls:'def',  pct:18, price:1200.00, target:'$1,219'},
   ];
   const COLORS = {tech:'#4a9eff', def:'#28c840', idx:'#febc2e'};
 
@@ -132,7 +133,7 @@
     const raw = HOLDINGS.map(h => amount * h.pct / 100);
     const rounded = raw.map(r => Math.round(r/10)*10);
     let diff = amount - rounded.reduce((a,b)=>a+b,0);
-    let idx = rounded.indexOf(Math.max(...rounded)); // dump remainder into the biggest holding (SWPPX)
+    let idx = rounded.indexOf(Math.max(...rounded));
     rounded[idx] += diff;
     return rounded;
   }
@@ -143,12 +144,11 @@
     const amount = Math.max(0, Number(document.getElementById('amt').value) || 0);
     const alloc = allocate(amount);
 
-    // rows
     const rows = HOLDINGS.map((h,i)=>{
       const $ = alloc[i];
       const sh = h.price ? ($/h.price).toFixed($>0 && $/h.price < 1 ? 3 : 2) : '—';
       return `<tr>
-        <td><span class="dot d-${h.cls}"></span><span class="tk">${h.ticker}</span> <span class="nm">${h.name}</span></td>
+        <td><span class="rank">${h.rank}</span><span class="dot d-${h.cls}"></span><span class="tk">${h.ticker}</span> <span class="nm">${h.name}</span></td>
         <td class="nm">${h.sector}</td>
         <td class="pct">${h.pct}%</td>
         <td class="dollar">${fmt($)}</td>
@@ -158,11 +158,9 @@
     document.getElementById('rows').innerHTML = rows;
     document.getElementById('ttot').textContent = fmt(alloc.reduce((a,b)=>a+b,0));
 
-    // bar
     document.getElementById('bar').innerHTML = HOLDINGS.map(h =>
       `<div style="width:${h.pct}%;background:${COLORS[h.cls]}"></div>`).join('');
 
-    // sectors
     const sec = {'AI / Tech':0,'Defensive':0,'Index':0};
     HOLDINGS.forEach((h,i)=> sec[h.sector]+=alloc[i]);
     const total = alloc.reduce((a,b)=>a+b,0) || 1;
@@ -175,9 +173,10 @@
     document.getElementById('sectors').innerHTML = sboxes;
 
     document.getElementById('note').innerHTML =
-      `<b>Version B</b> keeps your three-way defensive spread (consumer · energy · healthcare) intact while adding ` +
-      `<b>AVGO</b> to the tech sleeve. To stay at 40% AI/Tech, AVGO is funded by trimming NVDA and MU rather than ` +
-      `stacking on top. Amounts round to the nearest $10 and always sum to your exact monthly figure.`;
+      `<b>Version C — recommended list.</b> Ranked by conviction: NVDA, AVGO, SWPPX, WMT, MU, LLY. ` +
+      `XOM and NVO are dropped; LLY is the healthcare pick. Note the defensive sleeve is now consumer (WMT) + ` +
+      `healthcare (LLY) only — no energy hedge — so it carries more single-sector risk than the prior split. ` +
+      `Amounts round to the nearest $10 and always sum to your exact monthly figure.`;
   }
 
   document.getElementById('amt').addEventListener('input', render);
